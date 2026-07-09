@@ -189,6 +189,41 @@ public class VaultPage {
         JButton genBtn = createHeaderButton("\u26A1 Generator", TEAL, TEAL_HOVER);
         genBtn.addActionListener(e -> showGeneratorDialog());
 
+        JButton deleteAccBtn = createHeaderButton("Delete Account", new Color(185, 28, 28), new Color(153, 27, 27));
+        deleteAccBtn.addActionListener(e -> {
+            int choice = JOptionPane.showConfirmDialog(frame,
+                "Are you sure you want to permanently delete your master account and all stored passwords?\nThis action is irreversible and all passwords will be lost forever.",
+                "Delete Account?",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE);
+            if (choice == JOptionPane.YES_OPTION) {
+                String enteredUser = JOptionPane.showInputDialog(frame,
+                    "Type your username \"" + masterUsername + "\" to confirm deletion:",
+                    "Confirm Account Deletion",
+                    JOptionPane.WARNING_MESSAGE);
+                if (enteredUser != null && enteredUser.trim().equals(masterUsername)) {
+                    if (DatabaseManager.wipeVault()) {
+                        JOptionPane.showMessageDialog(frame,
+                            "Your account and vault data have been completely deleted.",
+                            "Account Deleted",
+                            JOptionPane.INFORMATION_MESSAGE);
+                        frame.dispose();
+                        new RegisterPage();
+                    } else {
+                        JOptionPane.showMessageDialog(frame,
+                            "An error occurred while trying to delete your account.",
+                            "Error",
+                            JOptionPane.ERROR_MESSAGE);
+                    }
+                } else if (enteredUser != null) {
+                    JOptionPane.showMessageDialog(frame,
+                        "Confirmation failed. Username does not match.",
+                        "Cancelled",
+                        JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        });
+
         JButton logoutBtn = createHeaderButton("Logout", RED, RED_HOVER);
         logoutBtn.addActionListener(e -> {
             int choice = JOptionPane.showConfirmDialog(frame,
@@ -203,6 +238,7 @@ public class VaultPage {
         rightPanel.add(searchField);
         rightPanel.add(addBtn);
         rightPanel.add(genBtn);
+        rightPanel.add(deleteAccBtn);
         rightPanel.add(logoutBtn);
 
         header.add(leftPanel, BorderLayout.WEST);
@@ -354,21 +390,21 @@ public class VaultPage {
         decryptedPasswords.clear();
 
         try {
-            ResultSet rs;
+            java.util.List<DatabaseManager.PasswordRecord> records;
             if (searchQuery != null && !searchQuery.isEmpty()) {
-                rs = DatabaseManager.searchPasswords(searchQuery);
+                records = DatabaseManager.searchPasswords(searchQuery);
             } else {
-                rs = DatabaseManager.getAllPasswords();
+                records = DatabaseManager.getAllPasswords();
             }
 
-            if (rs != null) {
+            if (records != null) {
                 int count = 0;
-                while (rs.next()) {
-                    int id = rs.getInt("id");
-                    String platform = rs.getString("platform");
-                    String username = rs.getString("account_username");
-                    String encPassword = rs.getString("encrypted_password");
-                    String url = rs.getString("website_url");
+                for (DatabaseManager.PasswordRecord rec : records) {
+                    int id = rec.id;
+                    String platform = rec.platform;
+                    String username = rec.username;
+                    String encPassword = rec.encryptedPassword;
+                    String url = rec.url;
 
                     // Decrypt password
                     String decrypted = "";
@@ -387,7 +423,6 @@ public class VaultPage {
                     tableModel.addRow(new Object[]{platform, username, masked, url, "actions"});
                     count++;
                 }
-                rs.close();
                 statsLabel.setText(count + " password" + (count != 1 ? "s" : "") + " stored");
             }
         } catch (Exception e) {

@@ -22,14 +22,39 @@ public class DatabaseManager {
      * Initialize the database connection and create tables if needed.
      */
     public static void initialize() {
+        java.io.File dbFile = new java.io.File("chabivault.db");
+        if (dbFile.exists() && dbFile.length() == 0) {
+            System.out.println("[DB] Database file is empty or corrupt. Deleting for clean generation...");
+            dbFile.delete();
+        }
+
         try {
             Class.forName("org.sqlite.JDBC");
             connection = DriverManager.getConnection(DB_URL);
             createTables();
             System.out.println("[DB] Database initialized: chabivault.db");
         } catch (Exception e) {
-            System.err.println("[DB] Failed to initialize database:");
-            e.printStackTrace();
+            System.err.println("[DB] Failed to initialize database. Attempting automatic recovery...");
+            try {
+                if (connection != null) connection.close();
+            } catch (Exception ex) {}
+
+            if (dbFile.exists()) {
+                dbFile.delete();
+            }
+
+            try {
+                connection = DriverManager.getConnection(DB_URL);
+                createTables();
+                System.out.println("[DB] Database recovered and initialized successfully.");
+            } catch (Exception fatal) {
+                System.err.println("[DB] Fatal error: Could not initialize database.");
+                fatal.printStackTrace();
+                javax.swing.JOptionPane.showMessageDialog(null,
+                    "Database initialization failed: " + fatal.getMessage() + "\nPlease try deleting 'chabivault.db' manually and restarting.",
+                    "Database Error", javax.swing.JOptionPane.ERROR_MESSAGE);
+                System.exit(1);
+            }
         }
     }
 
@@ -163,34 +188,63 @@ public class DatabaseManager {
     }
 
     /**
+     * PasswordRecord — represents a single credentials record retrieved from database.
+     */
+    public static class PasswordRecord {
+        public final int id;
+        public final String platform;
+        public final String username;
+        public final String encryptedPassword;
+        public final String url;
+        public final String notes;
+
+        public PasswordRecord(int id, String platform, String username, String encryptedPassword, String url, String notes) {
+            this.id = id;
+            this.platform = platform;
+            this.username = username;
+            this.encryptedPassword = encryptedPassword;
+            this.url = url;
+            this.notes = notes;
+        }
+    }
+
+    /**
      * Get all password entries ordered by platform name.
      */
-    public static ResultSet getAllPasswords() {
-        try {
-            Statement stmt = connection.createStatement();
-            return stmt.executeQuery("SELECT * FROM passwords ORDER BY platform ASC");
+    public static java.util.List<PasswordRecord> getAllPasswords() {
+        java.util.List<PasswordRecord> list = new java.util.ArrayList<>();
+        String sql = "SELECT id, platform, account_username, encrypted_password, website_url, notes FROM passwords ORDER BY platform ASC";
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                list.add(new PasswordRecord(
+                    rs.getInt("id"),
+                    rs.getString("platform"),
+                    rs.getString("account_username"),
+                    rs.getString("encrypted_password"),
+                    rs.getString("website_url"),
+                    rs.getString("notes")
+                ));
+            }
         } catch (SQLException e) {
             e.printStackTrace();
-            return null;
         }
+        return list;
     }
 
     /**
      * Get the total count of stored passwords.
      */
     public static int getPasswordCount() {
-        try {
-            Statement stmt = connection.createStatement();
-            ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM passwords");
-            rs.next();
-            int count = rs.getInt(1);
-            rs.close();
-            stmt.close();
-            return count;
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM passwords")) {
+            if (rs.next()) {
+                return rs.getInt(1);
+            }
         } catch (SQLException e) {
             e.printStackTrace();
-            return 0;
         }
+        return 0;
     }
 
     /**
@@ -198,11 +252,10 @@ public class DatabaseManager {
      */
     public static boolean updatePassword(int id, String platform, String username,
                                           String encryptedPassword, String url, String notes) {
-        try {
-            PreparedStatement ps = connection.prepareStatement(
+        try (PreparedStatement ps = connection.prepareStatement(
                 "UPDATE passwords SET platform=?, account_username=?, encrypted_password=?, " +
                 "website_url=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?"
-            );
+             )) {
             ps.setString(1, platform);
             ps.setString(2, username);
             ps.setString(3, encryptedPassword);
@@ -210,7 +263,6 @@ public class DatabaseManager {
             ps.setString(5, notes != null ? notes : "");
             ps.setInt(6, id);
             ps.executeUpdate();
-            ps.close();
             return true;
         } catch (SQLException e) {
             e.printStackTrace();
@@ -222,11 +274,9 @@ public class DatabaseManager {
      * Delete a password entry by ID.
      */
     public static boolean deletePassword(int id) {
-        try {
-            PreparedStatement ps = connection.prepareStatement("DELETE FROM passwords WHERE id=?");
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM passwords WHERE id=?")) {
             ps.setInt(1, id);
             ps.executeUpdate();
-            ps.close();
             return true;
         } catch (SQLException e) {
             e.printStackTrace();
@@ -237,19 +287,43 @@ public class DatabaseManager {
     /**
      * Search passwords by platform name or username.
      */
-    public static ResultSet searchPasswords(String query) {
-        try {
-            PreparedStatement ps = connection.prepareStatement(
-                "SELECT * FROM passwords WHERE platform LIKE ? OR account_username LIKE ? " +
-                "ORDER BY platform ASC"
-            );
+    public static java.util.List<PasswordRecord> searchPasswords(String query) {
+        java.util.List<PasswordRecord> list = new java.util.ArrayList<>();
+        String sql = "SELECT id, platform, account_username, encrypted_password, website_url, notes " +
+                     "FROM passwords WHERE platform LIKE ? OR account_username LIKE ? ORDER BY platform ASC";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
             String pattern = "%" + query + "%";
             ps.setString(1, pattern);
             ps.setString(2, pattern);
-            return ps.executeQuery();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(new PasswordRecord(
+                        rs.getInt("id"),
+                        rs.getString("platform"),
+                        rs.getString("account_username"),
+                        rs.getString("encrypted_password"),
+                        rs.getString("website_url"),
+                        rs.getString("notes")
+                    ));
+                }
+            }
         } catch (SQLException e) {
             e.printStackTrace();
-            return null;
+        }
+        return list;
+    }
+
+    /**
+     * Delete the master account and wipe all stored passwords.
+     */
+    public static boolean wipeVault() {
+        try (Statement stmt = connection.createStatement()) {
+            stmt.executeUpdate("DELETE FROM master_user");
+            stmt.executeUpdate("DELETE FROM passwords");
+            return true;
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return false;
         }
     }
 
